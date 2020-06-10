@@ -1,0 +1,346 @@
+-- START OF ASSIGNMENT
+
+-- IMPORTANT: BEFORE CREATING ANY TABLE, BELOW COMMAND NEEDS TO BE RUN
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+
+-- TO STOP APPENDING TABLE NAME TO THE COLUMN NAMES, BELOW COMMAND NEEDS TO BE RUN
+set hive.resultset.use.unique.column.names=false
+
+-- PARTITION THE DATA  
+-- IMPORTANT: BEFORE PARTITIONING ANY TABLE, BELOW COMMANDS NEEDS TO BE RUN
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+
+-- Storing data into temp folder first and then post data cleaning, it would be transferred to another table
+create external table if not exists initial_nyc_data_akhil (
+    VendorID int, tpep_pickup_datetime timestamp, tpep_dropoff_datetime timestamp, passenger_count int, trip_distance double, RatecodeID int,
+    store_and_fwd_flag char(1), PULocationID int, DOLocationID int, payment_type int, fare_amount double, extra double, mta_tax double,
+    tip_amount double, tolls_amount double, improvement_surcharge double, total_amount double
+) ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+LOCATION '/common_folder/nyc_taxi_data/'
+tblproperties ('skip.header.line.count'='1');
+
+-- Validating whether the data is correct in the table
+select *, minute(tpep_pickup_datetime) from initial_nyc_data_akhil limit 10;
+
+-- Basic Data Quality Checks
+-- How many records has each TPEP provider provided? Write a query that summarises the number of records of each provider.
+select VendorID, count(*) as number_of_records
+from initial_nyc_data_akhil
+group by VendorID
+order by VendorID;
+-- Vendor id 1(Creative Mobile Technologies, LLC) has 527386 records
+-- Vendor id 2(VeriFone Inc.) has 647183 records
+
+-- The data provided is for months November and December only. Check whether the data is consistent, and if not,
+-- identify the data quality issues. Mention all data quality issues in comments
+-- Lets check data contains which months
+select month(tpep_pickup_datetime) as month_of_ride, VendorID, count(*) as count_of_rows
+from initial_nyc_data_akhil
+group by month(tpep_pickup_datetime), VendorID
+order by month_of_ride, VendorID;
+-- Well, data contains January and October data as well which is not intended
+-- By looking at results, it is inferred that vendorid 2 provided incorrect information
+
+-- Lets check the data in column tpep_dropoff_datetime to check if it contains data outside date range
+select month(tpep_dropoff_datetime) as month_of_ride, VendorID, count(*) as count_of_rows
+from initial_nyc_data_akhil
+group by month(tpep_dropoff_datetime), VendorID
+order by month_of_ride, VendorID;
+-- Well, data contains January, April, October data as well which is not intended
+-- By looking at results, it is inferred that only vendorid 2 provided more incorrect information
+
+-- Lets check if data is from any other year apart from 2017
+select year(tpep_pickup_datetime) as year_of_ride, VendorID, count(*) as count_of_rows
+from initial_nyc_data_akhil
+group by year(tpep_pickup_datetime), VendorID
+order by year_of_ride, VendorID;
+-- Data is present for year 2003, 2008, 2009, and 2018 which is not intended
+-- By looking at results, it is inferred that only vendorid 2 provided incorrect information
+
+-- Lets check the data in column tpep_dropoff_datetime to check if it contains data outside date range
+select year(tpep_dropoff_datetime) as year_of_ride, VendorID, count(*) as count_of_rows
+from initial_nyc_data_akhil
+group by year(tpep_dropoff_datetime), VendorID
+order by year_of_ride, VendorID;
+-- Data is present for year 2003, 2008, 2009, 2018 and 2019 which is not intended
+-- By looking at results, it is inferred that vendorid 2 provided more incorrect information
+
+-- More data quality issues can be identified per column, let(s) execute 3rd Basic Data Quality Check
+-- and find out per column what are the issues
+-- You might have encountered unusual or erroneous rows in the dataset. Can you conclude which vendor is doing a bad job in 
+-- providing the records using different columns of the dataset? Summarise your conclusions based on every column where these
+-- errors are present. For example,  There are unusual passenger count, i.e. 0 which is unusual.
+
+-- Column 1 (vendor id)
+-- We have already checked it in earlier questions, and could not find any data issue in this column
+
+-- Column 2,3 (tpep_pickup_datetime, tpep_dropoff_datetime)
+-- As noted above, these contains values except from Novemeber, December 2017 and are qualified as data issues
+-- Lets see if drop off time is less then pick up time
+select VendorID, count(*) as incorrect_records
+from final_nyc_data_akhil_month_partition_orc
+where tpep_dropoff_datetime < tpep_pickup_datetime
+group by VendorID
+order by VendorID;
+-- As seen by results, VendorID 1 reported incorrect records - 71 times
+-- Hence it is concluded that only vendorid 1 provided incorrect information
+
+-- Column 4 (passenger_count) analysis
+select passenger_count, VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+group by passenger_count, VendorID
+order by passenger_count, VendorID
+-- We will assume that maximum of 6 people can sit on any cab. Hence any vendor reporting more then 5 passengers, will be considered
+-- as incorrect data
+-- As seen by results, passenger_count was reported as 0 and 7, by vendorid 1 - 6814 times 
+-- As seen by results, passenger_count was reported as 0, 7, 8 and 9, by vendorid 2 - 26 times
+-- Hence vendorid 1 reported more incorrect information
+
+-- Column 5 (trip_distance) analysis
+-- We are assuming that trip_distance can be zero if client cancels it
+-- But trip_distance can never be zero if start and drop time does not match
+select trip_distance, VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+where trip_distance = 0 and tpep_pickup_datetime != tpep_dropoff_datetime
+group by trip_distance, VendorID
+order by trip_distance, VendorID;
+-- By looking at results, it is inferred that vendorid 1 provided more incorrect information
+
+-- Also, checking whether trip_distance is always postive
+select trip_distance, VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+where trip_distance < 0
+group by trip_distance, VendorID
+order by trip_distance, VendorID;
+-- By looking at results, it looks like no vendor provided incorrect information.
+
+-- Column 6 (RatecodeID) analysis
+select RatecodeID, VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+group by RatecodeID, VendorID
+order by RatecodeID, VendorID;
+-- By looking at results, it is inferred that vendorid 1 provided more incorrect information as they have put ratecodeid value as 99
+-- which is not present in permissible column range
+
+-- Column 7 (store_and_fwd_flag) analysis
+select store_and_fwd_flag, VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+group by store_and_fwd_flag, VendorID
+order by store_and_fwd_flag, VendorID;
+-- Column 7 has all correct values
+
+-- Column 8 and Column 9 (PULocationID, DOLocationID) analysis is not needed as no information is provided on them
+-- Column 10 (payment_type) analysis
+select payment_type, VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+group by payment_type, VendorID
+order by payment_type, VendorID;
+-- We will assume that chargecode 4 which means Dispute as faulty value
+-- By looking at results, it is inferred that vendorid 1 provided more incorrect information
+
+-- Column 11 (fare_amount) analysis
+select VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+where fare_amount < 0
+group by VendorID
+order by VendorID;
+-- By looking at results, it is inferred that only vendorid 2 provided incorrect information
+
+-- Column 12 (extra) analysis
+select VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+where !(extra = 0 or extra = 0.5 or extra = 1)
+group by VendorID
+order by VendorID;
+-- By looking at results, it is inferred that vendorid 2 provided more incorrect information
+
+-- Column 13 (mta_tax) analysis
+select mta_tax, VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+group by mta_tax, VendorID
+order by mta_tax, VendorID;
+-- We will assume that 0, 0.5 are the correct value of this column
+-- By looking at results, it is inferred that vendorid 2 provided more incorrect information
+
+-- Column 14 (improvement_surcharge) analysis
+select improvement_surcharge, VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+group by improvement_surcharge, VendorID
+order by improvement_surcharge, VendorID;
+-- We will assume that only 0.3 is the correct value of this column
+-- By looking at results, it is inferred that vendorid 2 provided more incorrect information
+
+-- Column 15, 16, 17 (tip_amount, tolls_amount and total_amount) analysis
+-- We have assumed that any type of fare or tip cannot be negative
+select VendorID, count(*) as frequency
+from initial_nyc_data_akhil
+where (tip_amount < 0 or tolls_amount < 0 or total_amount < 0)
+group by VendorID
+order by VendorID;
+-- By looking at results, it is inferred that only vendorid 2 provided incorrect information
+
+-- Lets create a clean, ORC partitioned table for analysis. We will remove all the erroneous rows
+create external table if not exists final_nyc_data_akhil_month_partition_orc
+(
+    tpep_pickup_datetime timestamp, tpep_dropoff_datetime timestamp, passenger_count int, trip_distance double, RatecodeID int,
+    store_and_fwd_flag char(1), PULocationID int, DOLocationID int, payment_type int, fare_amount double, extra double, mta_tax double,
+    tip_amount double, tolls_amount double, improvement_surcharge double, total_amount double
+)
+partitioned by (VendorID int, mnth int)
+stored as orc location '/user/hive/warehouse/akhil_minhas_nyc_assignment4/'
+tblproperties ("orc.compress"="SNAPPY");
+
+-- Lets remove erroneous data and insert into ORC table
+insert overwrite table final_nyc_data_akhil_month_partition_orc partition(VendorID, mnth)
+select tpep_pickup_datetime, tpep_dropoff_datetime, passenger_count, trip_distance, RatecodeID, store_and_fwd_flag, PULocationID,
+DOLocationID, payment_type, fare_amount, extra, mta_tax, tip_amount, tolls_amount, improvement_surcharge, total_amount,
+VendorID, month(tpep_pickup_datetime) as mnth
+from initial_nyc_data_akhil
+where (
+    ( month(tpep_pickup_datetime) = 11 or month(tpep_pickup_datetime) = 12 and month(tpep_dropoff_datetime) = 11 or month(tpep_dropoff_datetime) = 12)
+    and ( year(tpep_pickup_datetime) = 2017 and year(tpep_dropoff_datetime) = 2017 )
+    and passenger_count != 0 and passenger_count < 7
+    and !( trip_distance = 0 and tpep_pickup_datetime != tpep_dropoff_datetime )
+	and (tpep_dropoff_datetime >= tpep_pickup_datetime)
+    and RatecodeID < 7
+    and payment_type != 4
+    and ( mta_tax = 0 or mta_tax = 0.5 )
+    and ( extra = 0 or extra = 0.5 or extra = 1)
+    and improvement_surcharge = 0.3
+    and tip_amount >= 0
+    and tolls_amount >= 0
+    and total_amount >= 0
+    and fare_amount >= 0
+);
+
+-- Analysis-I
+-- Compare the overall average fare per trip for November and December
+-- Average fare for November and December
+select avg(total_amount) as average_fare, month(tpep_pickup_datetime) as month_of_fare
+from final_nyc_data_akhil_month_partition_orc
+group by month(tpep_pickup_datetime)
+order by month_of_fare;
+-- Average fare for November is 16.24
+-- Average fare for December is 15.94
+-- November fare is more then December
+
+-- Average fare across dataset
+select avg(total_amount) as average_fare
+from final_nyc_data_akhil_month_partition_orc;
+-- Average fare of all dataset is 16.09
+
+-- Explore the ‘number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’? 
+-- Do most people travel solo or with other people?
+select passenger_count, count(*) as number_of_passengers
+from final_nyc_data_akhil_month_partition_orc
+group by passenger_count
+order by passenger_count;
+-- Count 1 - 820763
+-- Count 2 - 175306
+-- Count 3 - 50282
+-- Count 4 - 24743
+-- Count 5 - 54174
+-- Count 6 - 32956
+-- By looking at the data, it is inferred that most people travel solo
+
+-- Which is the most preferred mode of payment?
+select payment_type, count(*) as number_of_transactions
+from final_nyc_data_akhil_month_partition_orc
+group by payment_type
+order by payment_type;
+-- Payment_type-1(Credit card) is widely used
+
+-- What is the average tip paid per trip? Compare the average tip with the 25th, 50th and 75th percentiles and
+-- comment whether the ‘average tip’ is a representative statistic (of the central tendency) of ‘tip amount paid’.
+-- Hint: You may use percentile_approx(DOUBLE col, p): Returns an approximate pth percentile of a numeric column
+-- (including floating point types) in the group.
+select avg(tip_amount)
+from final_nyc_data_akhil_month_partition_orc;
+-- 1.83 is the average dollar tip per trip
+
+-- 25th, 50th and 75th percentile
+select percentile_approx(tip_amount, array(0.25, 0.50, 0.75))
+from final_nyc_data_akhil_month_partition_orc;
+
+-- 50th percentile is 1.35 and average is 1.83
+-- So, ‘average tip’ is NOT a representative statistic (of the central tendency) of ‘tip amount paid’
+
+-- Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?
+select count(*) as number_of_rows
+from final_nyc_data_akhil_month_partition_orc
+where extra > 0;
+-- Number of trips where extra charge is levied   = 533378
+
+select count(*) as number_of_rows
+from final_nyc_data_akhil_month_partition_orc;
+-- Number of total trips = 1158224
+-- what fraction of total trips have an extra charge is levied? = 533378/1158224 => 0.46
+
+-- Analysis-II
+-- What is the correlation between the number of passengers on any given trip, and the tip paid per trip?
+-- Do multiple travellers tip more compared to solo travellers? Hint: Use CORR(Col_1, Col_2)
+select corr(tip_amount, passenger_count)
+from final_nyc_data_akhil_month_partition_orc;
+-- Correlation is -0.0054
+-- There is less correlation between two columns and it is negative.
+-- So, multiple travellers tip less as compared to solo travellers
+
+-- Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20.
+-- Calculate the percentage share of each bucket (i.e. the fraction of trips falling in each bucket).
+-- Segregating data based on tip paid
+select
+(case
+    when tip_amount >= 0  and tip_amount < 5 then  "[0-5)"
+    when tip_amount >= 5  and tip_amount < 10 then "[5-10)"
+    when tip_amount >= 10 and tip_amount < 15 then "[10-15)"
+    when tip_amount >= 15 and tip_amount < 20 then "[15-20)"
+    when tip_amount >= 20 then ">=20"
+end) as tip_bucket,
+round(count(*) / 1158295, 4) * 100 as percentage_fraction_of_total_records
+from final_nyc_data_akhil_month_partition_orc
+group by
+(case
+    when tip_amount >= 0  and tip_amount < 5 then  "[0-5)"
+    when tip_amount >= 5  and tip_amount < 10 then "[5-10)"
+    when tip_amount >= 10 and tip_amount < 15 then "[10-15)"
+    when tip_amount >= 15 and tip_amount < 20 then "[15-20)"
+    when tip_amount >= 20 then ">=20"
+end)
+order by percentage_fraction_of_total_records;
+-- Below are the percentage share of each bucket
+-- [0-5)   -> 92.33%
+-- [5-10)  -> 5.64%
+-- [10-15) -> 1.73%
+-- [15-20) -> 0.2%
+-- >=20	   -> 0.1%
+
+-- Which month has a greater average ‘speed’ - November or December?
+-- Note that the variable ‘speed’ will have to be derived from other metrics. Hint: You have columns for distance and time.
+select month(tpep_pickup_datetime) as month_of_year,
+sum(trip_distance) / sum(round((unix_timestamp(tpep_dropoff_datetime) - unix_timestamp(tpep_pickup_datetime)) / 3600, 4)) as miles_per_hour
+from final_nyc_data_akhil_month_partition_orc
+group by month(tpep_pickup_datetime);
+-- December month has greater average speed
+
+-- Analyse the average speed of the most happening days of the year, i.e. 31st December (New year’s eve) and
+-- 25th December (Christmas) and compare it with the overall average.
+-- We will consider those trips whose pick up date is 25th December and 31st December
+-- Overall average
+select
+sum(trip_distance) / sum(round((unix_timestamp(tpep_dropoff_datetime) - unix_timestamp(tpep_pickup_datetime)) / 3600, 4)) as total_average_miles_per_hour
+from final_nyc_data_akhil_month_partition_orc;
+-- Overall average is 9.78 miles per hour
+
+-- 25th and 31st December average
+select
+sum(trip_distance) / sum(round((unix_timestamp(tpep_dropoff_datetime) - unix_timestamp(tpep_pickup_datetime)) / 3600, 4)) as total_average_miles_per_hour
+from final_nyc_data_akhil_month_partition_orc
+where(
+day(tpep_pickup_datetime) = 25 or day(tpep_pickup_datetime) = 31
+and month(tpep_pickup_datetime) = 12
+);
+-- 25th and 31st December average is 12.29 miles per hour
+-- Average speed of 25th, 31st Dec is higher than total average
+
+-- END OF ASSIGNMENT

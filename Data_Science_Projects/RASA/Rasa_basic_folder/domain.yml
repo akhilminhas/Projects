@@ -1,0 +1,118 @@
+actions:
+- action_fetch_five_restaurants
+- action_fetch_ten_restaurants
+- action_search_restaurants
+- action_send_email
+- action_validate_location
+- utter_ask_budget
+- utter_ask_cuisine
+- utter_ask_emailId
+- utter_ask_location
+- utter_default
+- utter_goodbye
+- utter_greet
+- utter_if_email_has_to_sent
+- utter_location_not_serviceable
+entities:
+- cuisine
+- email_address
+- email_has_to_be_sent
+- location
+- max_price
+- min_price
+- people
+- restaurant_information
+intents:
+- restaurant_search
+- greet
+- affirm
+- goodbye
+- stop
+responses:
+  utter_ask_budget:
+  - buttons:
+    - payload: Lesser than Rs 300
+      title: Lesser than Rs 300
+    - payload: Rs 300 to 700
+      title: Rs 300 to 700
+    - payload: More than 700
+      title: More than 700
+    text: What price range are you looking for
+  utter_ask_cuisine:
+  - buttons:
+    - payload: Chinese
+      title: Chinese
+    - payload: Mexican
+      title: Mexican
+    - payload: Italian
+      title: Italian
+    - payload: American
+      title: American
+    - payload: South Indian
+      title: South Indian
+    - payload: North Indian
+      title: North Indian
+    text: What kind of cuisine would you prefer
+  utter_ask_emailId:
+  - text: Can I have your email Id
+  - text: Can you tell me your email Id so that I can send the email
+  - text: Please type the email Id where I should send the email
+  utter_ask_location:
+  - text: In what location should I search restaurants for you
+  - text: In which location would you want me to search the restaurant
+  - text: Tell me in which location would you like to eat
+  utter_default:
+  - text: I cannot understand
+  - text: Well, this is embarrassing. I could not understand your ask as I am still
+      a learner
+  - text: Would you mind telling me again as I could not understand your last message.
+      Hopefully with my everyday learning, this will not be repeated in future
+  utter_goodbye:
+  - text: goodbye :(
+  - text: Bye-bye
+  - text: I enjoyed talking to you. Hoping to see you soon. Bbye!
+  - text: Well, all good things comes to end. It was a nice conversation. I am just
+      a ping away from you. Bbye!
+  utter_greet:
+  - text: Hey there! How may i help you
+  - text: Hi, How can I help you!
+  - text: Hey, Hoping you are staying safe. How may I help you today
+  - text: Hey, I am Foodie bot, how can I help you
+  utter_if_email_has_to_sent:
+  - buttons:
+    - payload: Yes, send the email
+      title: Yes, send the email
+    - payload: No, don't send the email
+      title: No, don't send the email
+    text: Would you want me to send the details of the top 10 restaurants over an
+      email
+  utter_location_not_serviceable:
+  - text: We do not operate in that area yet
+session_config:
+  carry_over_slots_to_new_session: false
+  session_expiration_time: 0
+slots:
+  cuisine:
+    type: text
+  email_address:
+    type: text
+  email_has_to_be_sent:
+    type: text
+  location:
+    type: text
+  max_price:
+    max_value: 10000.0
+    min_value: 10.0
+    type: float
+  min_price:
+    max_value: 10000.0
+    min_value: 10.0
+    type: float
+  number_of_restaurants:
+    max_value: 11.0
+    min_value: 4.0
+    type: float
+  restaurant_information:
+    type: text
+  valid_location:
+    type: bool
